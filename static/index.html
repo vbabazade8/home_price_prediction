@@ -11,6 +11,7 @@
         <label>Rooms: <input type="number" id="rooms" required></label><br>
         <label>Area (m²): <input type="number" id="area" step="0.1" required></label><br>
         <label>Floor: <input type="number" id="floor" required></label><br>
+        <label>Total floors in building: <input type="number" id="floors" required></label><br>
         <label>Has repair: <input type="checkbox" id="hasRepair"></label><br>
         <label>Location: <input type="text" id="location" required></label><br>
         <button type="submit">Predict</button>
@@ -24,10 +25,11 @@ document.getElementById("predict-form").addEventListener("submit", async functio
     const rooms = document.getElementById("rooms").value;
     const area = document.getElementById("area").value;
     const floor = document.getElementById("floor").value;
+    const floors = document.getElementById("floors").value;
     const hasRepair = document.getElementById("hasRepair").checked;
     const location = document.getElementById("location").value;
 
-    const url = `/predict?rooms=${rooms}&area=${area}&floor=${floor}&has_repair=${hasRepair}&location=${location}`;
+    const url = `/predict?rooms=${rooms}&area=${area}&floor=${floor}&floors=${floors}&has_repair=${hasRepair}&location=${location}`;
 
     const response = await fetch(url);
     const data = await response.json();
