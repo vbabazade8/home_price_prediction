@@ -22,6 +22,15 @@ model = joblib.load("models/model.pkl")
 DEFAULT_IS_VIPPED = 0
 DEFAULT_IS_FEATURED = 0
 
+# Known districts, taken straight from the model's own feature names
+# (columns starting with "location_"), so the dropdown always matches
+# exactly what the model was trained on.
+LOCATIONS = sorted(
+    name.removeprefix("location_")
+    for name in model.feature_names_in_
+    if name.startswith("location_") and name != "location_Other"
+)
+
 
 def build_features(rooms, area, floor, floors, has_repair, location):
     """
@@ -57,6 +66,12 @@ def build_features(rooms, area, floor, floors, has_repair, location):
 def read_root():
     # Redirect the root URL straight to the prediction form.
     return RedirectResponse(url="/static/index.html")
+
+@app.get("/locations")
+def get_locations():
+     # Lets the frontend fill its dropdown from the model itself,
+    # instead of hardcoding district names in the HTML.
+    return {"locations": LOCATIONS}
 
 
 @app.get("/predict")

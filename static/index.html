@@ -1,42 +1,93 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Price Prediction</title>
+    <!-- Emoji favicon as an inline SVG: no separate image file needed -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏠</text></svg>">
+    <!-- Styles live in a separate file -->
+    <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <h1>Predict apartment price</h1>
+    <div class="card">
+        <h1>🏠 Predict apartment price</h1>
 
-    <form id="predict-form">
-        <label>Rooms: <input type="number" id="rooms" required></label><br>
-        <label>Area (m²): <input type="number" id="area" step="0.1" required></label><br>
-        <label>Floor: <input type="number" id="floor" required></label><br>
-        <label>Total floors in building: <input type="number" id="floors" required></label><br>
-        <label>Has repair: <input type="checkbox" id="hasRepair"></label><br>
-        <label>Location: <input type="text" id="location" required></label><br>
-        <button type="submit">Predict</button>
-    </form>
+        <form id="predict-form">
+            <label>Rooms
+                <input type="number" id="rooms" value="3" min="1" required>
+            </label>
+            <label>Area (m²)
+                <input type="number" id="area" value="80" step="0.1" min="10" required>
+            </label>
+            <label>Floor
+                <input type="number" id="floor" value="5" min="1" required>
+            </label>
+            <label>Total floors in building
+                <input type="number" id="floors" value="9" min="1" required>
+            </label>
+            <label>Location
+                <select id="location" required></select>
+            </label>
+            <label class="checkbox-label">
+                <input type="checkbox" id="hasRepair" checked> Has repair
+            </label>
+            <button type="submit">Predict</button>
+        </form>
 
-    <p id="result"></p>
-<script>
-document.getElementById("predict-form").addEventListener("submit", async function (event) {
-    event.preventDefault();
+        <p id="result"></p>
+    </div>
 
-    const rooms = document.getElementById("rooms").value;
-    const area = document.getElementById("area").value;
-    const floor = document.getElementById("floor").value;
-    const floors = document.getElementById("floors").value;
-    const hasRepair = document.getElementById("hasRepair").checked;
-    const location = document.getElementById("location").value;
+    <script>
+        // Fill the district dropdown from the API, so the names always
+        // match exactly what the model was trained on.
+        async function loadLocations() {
+            const response = await fetch("/locations");
+            const data = await response.json();
+            const select = document.getElementById("location");
+            for (const name of data.locations) {
+                const option = document.createElement("option");
+                option.value = name;
+                option.textContent = name;
+                select.appendChild(option);
+            }
+        }
+        loadLocations();
 
-    const url = `/predict?rooms=${rooms}&area=${area}&floor=${floor}&floors=${floors}&has_repair=${hasRepair}&location=${location}`;
+        document.getElementById("predict-form").addEventListener("submit", async function (event) {
+            event.preventDefault();  // stop the browser from reloading the page
 
-    const response = await fetch(url);
-    const data = await response.json();
+            const rooms = document.getElementById("rooms").value;
+            const area = document.getElementById("area").value;
+            const floor = document.getElementById("floor").value;
+            const floors = document.getElementById("floors").value;
+            const hasRepair = document.getElementById("hasRepair").checked;
+            const location = document.getElementById("location").value;
 
-    document.getElementById("result").textContent = "Predicted price: " + data.predicted_price + " AZN";
+            // A floor can't be higher than the number of floors in the building.
+            // Values from inputs are strings, so convert to numbers before comparing.
+            if (Number(floor) > Number(floors)) {
+                result.classList.add("error")
+                result.textContent = "Floor cant't be higheer than total floors in the building.";
+                return;
+            }
 
-});
-</script>
+            // encodeURIComponent makes district names safe to put in a URL
+            const url = `/predict?rooms=${rooms}&area=${area}&floor=${floor}&floors=${floors}&has_repair=${hasRepair}&location=${encodeURIComponent(location)}`;
+
+            const response = await fetch(url);
+            const data = await response.json();
+            if (!response.ok) {
+                result.classList.add("error");
+                result.textContent = data.detail;
+                return;
+            }
+            result.classList.remove("error");
+
+            // toLocaleString adds thousands separators: 176127 -> 176,127
+            document.getElementById("result").textContent =
+                "Predicted price: " + data.predicted_price.toLocaleString("en-US") + " AZN";
+        });
+    </script>
 </body>
 </html>
