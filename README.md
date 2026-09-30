@@ -5,6 +5,10 @@ trained on real listings scraped from bina.az.
 
 ## Live demo
 
+Hosted on Render's free tier: the service sleeps after 15 minutes
+without traffic, so the first request after that can take about a
+minute while it wakes up.
+
 https://home-price-prediction-ae4m.onrender.com/static/index.html
 
 ## Project stages
@@ -20,7 +24,7 @@ https://home-price-prediction-ae4m.onrender.com/static/index.html
    listings mixed into the sale data), casts types, saves cleaned
    data to `data/item_clean_full.csv`.
 
-3. **Model development** (`scripts/train.ipynb`, `scripts/explore_full_data.ipynb`) —
+3. **Model development** (`scripts/01_train_filtered_data.ipynb`, `scripts/02_explore_train_full_data.ipynb`) —
    feature preparation, comparing candidate models with justified
    metrics, hyperparameter tuning, saving the final model to
    `models/model.pkl`.
