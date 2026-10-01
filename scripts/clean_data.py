@@ -1,26 +1,55 @@
 import pandas as pd
-import sys
 
-sys.stdout.reconfigure(encoding="utf-8")
+# Raw full-catalog scrape -> cleaned dataset for model training.
+# The older files (items.csv / items_full.csv and their cleaned versions)
+# are kept as they are, so notebooks 01-03 still reproduce their results.
+INPUT_PATH = "data/items_all.csv"
+OUTPUT_PATH = "data/item_clean_all.csv"
 
-df = pd.read_csv("data/items.csv")
+# Columns that identify the same property re-posted under a different id
+# (found in 03_eda: ~10% of listings were such duplicates).
+DUPLICATE_COLS = ["price", "rooms", "area", "floor", "floors", "location", "hasRepair"]
 
-# Drop listings with no rooms value — these are land plots or commercial
-# properties, not apartments, and don't fit this residential price model.
-df_clean = df[df["rooms"].notna()]
 
-# Drop very cheap rows — anything this low isn't a real sale price, it's
-# either bad data or a rental listing mixed into the sale data.
-df_clean = df_clean[df_clean["price"] >= 5000]
+def report(step, df):
+    """Print how many rows are left after each step, so every filter is visible."""
+    print(f"{step:<45} {len(df):>6} rows")
 
-# price_per_m2 catches the rest of the rental contamination: real sale
-# prices in Baku run in the thousands per m², rentals in the tens/hundreds.
-df_clean["price_per_m2"] = df_clean["price"] / df_clean["area"]
-df_clean = df_clean[df_clean["price_per_m2"] >= 300]
-df_clean["rooms"] = df_clean["rooms"].astype(int)  # safe now that NaNs are gone
 
-# Drop listings with no location — needed as a feature for the model.
-df_clean = df_clean[df_clean["location"].notna()]
-df_clean["price_per_m2"] = df_clean["price_per_m2"].round(2)
+df = pd.read_csv(INPUT_PATH)
+report("raw", df)
 
-df_clean.to_csv("data/item_clean.csv", index=False, encoding="utf-8")
+# The scrape is sorted by "last bumped": a listing bumped during the run can
+# appear on two pages. Same id = same listing, keep one.
+df = df.drop_duplicates(subset="id")
+report("after dropping repeated ids", df)
+
+# No rooms = land or commercial property, not an apartment.
+df = df[df["rooms"].notna()]
+report("after dropping listings without rooms", df)
+
+# Very low prices are data errors or rentals mixed into the sale catalog.
+df = df[df["price"] >= 5000].copy()
+report("after dropping price < 5000", df)
+
+# Price per m2 below 300 AZN is not a realistic sale price in this market.
+df["price_per_m2"] = df["price"] / df["area"]
+df = df[df["price_per_m2"] >= 300]
+report("after dropping price per m2 < 300", df)
+
+df = df[df["location"].notna()]
+report("after dropping missing location", df)
+
+df["rooms"] = df["rooms"].astype(int)
+df["price_per_m2"] = df["price_per_m2"].round(2)
+
+# Same property re-posted by sellers under different ids. If copies end up
+# in both train and test, the test score is too optimistic (data leakage).
+df = df.drop_duplicates(subset=DUPLICATE_COLS)
+report("after dropping re-posted duplicates", df)
+
+df.to_csv(OUTPUT_PATH, index=False, encoding="utf-8")
+print("saved to", OUTPUT_PATH)
+
+print()
+print(df["city"].value_counts().head(10))
