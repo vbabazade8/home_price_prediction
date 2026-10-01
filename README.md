@@ -1,190 +1,92 @@
 # Home Price Prediction
 
-Predicts apartment sale prices in Baku using a machine learning model
-trained on real listings scraped from bina.az.
+Predicts apartment sale prices in Baku from listings scraped from bina.az.
 
-## Live demo
+**Live demo:** https://home-price-prediction-ae4m.onrender.com/static/index.html
+(free Render tier: the first request after 15 idle minutes can take about a minute)
 
-https://home-price-prediction-ae4m.onrender.com/static/index.html
+## Results
 
-Hosted on Render's free tier: the service sleeps after 15 minutes
-without traffic, so the first request after that can take about a
-minute while it wakes up.
+| Metric | Value |
+|---|---|
+| MAE | ~37,500 AZN |
+| R² | 0.832 |
+| MAPE | 11.5% |
+| Model | HistGradientBoosting (Optuna-tuned), 27 MB |
+| Data | 44,382 listings (full bina.az sale catalog, Oct 2026) |
 
-## Project stages
+Measured on a 20% hold-out not used for training or tuning.
 
-1. **Scraping** (`scripts/scraper.py`) — collects the full sale catalog
-   from bina.az's GraphQL API (`SearchItems` operation, ~58.7k listings).
-   Pages of 25 listings (the server's maximum), cursor pagination,
-   retries on network errors. Saves raw data to `data/items_all.csv`.
+## Pipeline
 
-2. **Cleaning** (`scripts/clean_data.py`) — drops listings without rooms
-   or district, unrealistic prices (< 5,000 AZN or < 300 AZN/m²), repeated
-   ids, and the same property re-posted under different ids. Prints the
-   row count after every step. Saves `data/item_clean_all.csv`
-   (44,382 rows).
+```mermaid
+flowchart LR
+    A[bina.az GraphQL] --> B[scraper.py<br/>58.7k listings]
+    B --> C[clean_data.py<br/>44.4k rows]
+    C --> D[notebooks 03–04<br/>EDA, model selection]
+    D --> E[model.pkl]
+    E --> F[FastAPI]
+    F --> G[Docker → Render]
+```
 
-3. **Model development** (notebooks, in order):
-   - `scripts/01_train_filtered_data.ipynb` — first model on ~950 VIP listings
-   - `scripts/02_explore_train_full_data.ipynb` — 10x more data, Random Forest
-   - `scripts/03_eda.ipynb` — exploratory data analysis
-   - `scripts/04_model_selection.ipynb` — duplicates, full catalog,
-     LazyPredict, Optuna, final model
+- `scripts/scraper.py` — full `SearchItems` catalog, 25 listings per page (server maximum), retries on errors.
+- `scripts/clean_data.py` — drops non-apartments, unrealistic prices, missing districts and duplicates; prints rows left after each step.
+- `scripts/01–04_*.ipynb` — model development, in order (first model → more data → EDA → model selection).
+- `api/main.py` — `/predict` and `/locations`; `static/` — the form; `api/Dockerfile` — the container.
 
-4. **API** (`api/main.py`) — a FastAPI backend that loads the trained
-   model and exposes `/predict` and `/locations` endpoints.
+## How the model improved
 
-5. **Frontend** (`static/index.html`, `static/style.css`) — a form with a
-   district dropdown that calls the API and shows the predicted price.
+![MAE history](docs/images/mae_history.png)
 
-6. **Containerization** (`api/Dockerfile`) — packages the API, model,
-   and frontend into a Docker image so it runs the same way on any
-   machine.
+- **Duplicates.** ~10% of listings were the same property re-posted. Copies in both train and test made the 42k score too optimistic; removing them gave an honest 44.3k.
+- **More data.** The error was still falling as training data grew, so the full catalog was scraped: 44.3k → 38.2k with the same model.
 
-7. **Deployment** — the Docker image is deployed on Render (free
-   tier), giving the app a public URL.
+![Learning curve](docs/images/learning_curve.png)
 
-## Model architecture
+- **Model choice.** LazyPredict compared ~40 models; tree ensembles and boosting led. The forests were the most accurate but far too large to deploy:
 
-- **Algorithm:** `HistGradientBoostingRegressor` (scikit-learn), tuned
-  with Optuna: learning_rate 0.038, 1,100 iterations, 222 leaves per
-  tree, min_samples_leaf 5, max_features 0.54. Model size: ~27 MB.
-- **Features (input to the model):**
-  - `rooms` — number of rooms
-  - `area` — total area (m²)
-  - `floor` — floor the apartment is on
-  - `floors` — total floors in the building
-  - `hasRepair` — whether the apartment has renovations (0/1)
-  - `isVipped`, `isFeatured` — whether the original listing was
-    promoted on bina.az (fixed to a constant value in the API, not
-    user-editable — see "Why these two features are fixed" below)
-  - `location_*` — one-hot encoded district (83 columns; districts
-    with fewer than 5 listings are grouped into `location_Other`)
-- **Target:** `price` (sale price in AZN)
+![Accuracy vs size](docs/images/accuracy_vs_size.png)
 
-## Why this model
+- **Tuning.** HistGradientBoosting was tuned with Optuna (40 trials) and compared with a smaller ExtraTrees on the hold-out:
 
-**Metrics.** MAE (mean absolute error, in AZN) is the primary metric:
-"the model is off by this many manats on average". RMSE (penalizes large
-errors), R² (share of price variance explained) and MAPE (error as % of
-the real price) are reported alongside.
+| Model | MAE | RMSE | R² | Size |
+|---|---|---|---|---|
+| ExtraTrees (small) | 40,216 | 114,876 | 0.779 | 56 MB |
+| **HistGradientBoosting (tuned)** | **37,456** | **100,104** | **0.832** | **27 MB** |
 
-**1. Many models at once.** LazyPredict trained ~40 regressors on a
-random 10k-row sample. Tree ensembles and boosting led; linear models
-plateaued at R² ≈ 0.73. The ranking depended on the metric: boosting led
-on R²/RMSE, ExtraTrees and Random Forest on MAE.
+Numbers from different steps come from different test sets: they show the direction and size of each change, not exact differences.
 
-**2. Shortlist on all data** (5-fold cross-validation, default settings):
+## Features
 
-| Model | MAE | RMSE | R² | MAPE | Size |
-|---|---|---|---|---|---|
-| ExtraTrees | 36,046 | 94,515 | 0.834 | 11.4% | 482 MB |
-| Random Forest | 37,598 | 96,404 | 0.827 | 11.8% | 318 MB |
-| HistGradientBoosting | 47,115 | 108,129 | 0.783 | 14.9% | 0.4 MB |
+`rooms`, `area`, `floor`, `floors`, `hasRepair`, district (83 one-hot columns; districts with < 5 listings → `Other`), and `isVipped` / `isFeatured`.
 
-The forests were the most accurate but far too large to deploy (GitHub
-file limit 100 MB, Render free tier 512 MB RAM). So the goal became:
-the most accurate model that fits these limits.
+The VIP flags correlate with price only because owners of pricier apartments pay for promotion more often, so the API fixes them to a constant: otherwise a user could raise their own prediction just by ticking "VIP".
 
-**3. Final comparison** on a 20% hold-out not used for tuning: a smaller
-ExtraTrees (50 trees, min_samples_leaf 3) vs HistGradientBoosting tuned
-with Optuna (40 trials, 3-fold CV):
+## Limitations
 
-| Model | MAE | RMSE | R² | MAPE | Size |
-|---|---|---|---|---|---|
-| ExtraTrees (small) | 40,216 | 114,876 | 0.779 | 12.2% | 56 MB |
-| **HistGradientBoosting (tuned)** | **37,456** | **100,104** | **0.832** | **11.5%** | **27 MB** |
+- **Baku only:** 98.4% of listings are in Baku; other cities are unreliable.
+- **Repair vs new buildings:** "no repair" usually means a new building sold without finishing, which is more expensive, so repair can lower the prediction for some inputs. A new-build/resale feature would fix this.
+- **Duplicate detection is approximate:** identical apartments in the same building may be removed as duplicates.
 
-The tuned boosting model wins on every metric at half the size. The final
-model is retrained on all 44k rows.
-
-## How the model was improved
-
-| Step | Data | Model | MAE (AZN) |
-|---|---|---|---|
-| First version | ~950 VIP listings | Random Forest | ~88,600 |
-| 10x more data | ~9,500 listings | Random Forest | ~42,000 (too optimistic, see below) |
-| Duplicates removed | ~8,600 listings | Random Forest | ~44,300 |
-| Full catalog | ~44,400 listings | Random Forest | ~38,200 |
-| Model choice + tuning | ~44,400 listings | HistGradientBoosting | ~37,500 (hold-out) |
-
-- **Duplicates.** EDA found that ~10% of listings were the same property
-  re-posted under different ids. Copies in both train and test made the
-  test score too optimistic (data leakage). Removing them gave an honest
-  baseline.
-- **More data.** A learning curve showed MAE still falling as training
-  data grew, so the full catalog was scraped. With the same model, MAE
-  dropped from ~44.3k to ~38.2k.
-- **Model choice and tuning** — see "Why this model".
-
-Numbers in different rows come from different test sets, so they show
-the direction and size of each improvement, not exact differences.
-
-## Why these two features are fixed (isVipped, isFeatured)
-
-VIP-promoted listings in the training data have a higher average
-price per square meter than non-VIP listings, even accounting for
-area and room count. However, this is very likely correlation from
-self-selection — owners of pricier apartments more often choose to
-pay for VIP promotion — rather than VIP status itself increasing an
-apartment's value. Exposing this as a user-editable field in the form
-would let someone artificially inflate their predicted price by
-toggling it, without changing anything about the actual apartment. To
-avoid this, both fields are fixed to a constant value inside the API
-and are not part of the form.
-
-## Known limitations
-
-- **Baku only.** 98.4% of listings in the full catalog are in Baku
-  (Xırdalan 612, Sumqayıt 83, other cities single listings), so
-  predictions outside Baku are unreliable.
-- **Repair is mixed up with new buildings.** In the data, "no repair"
-  mostly means "new building sold without finishing" (e.g. Ağ şəhər,
-  Sea Breeze), and new buildings are more expensive. The model can
-  therefore predict a *lower* price with repair for some inputs (e.g. a
-  250 m² apartment in Xətai). A new-build/resale feature would fix this.
-- **Duplicate detection is approximate.** Listings are treated as
-  duplicates when price, rooms, area, floor, floors, district and repair
-  all match; two genuinely different identical apartments in the same
-  building may be removed as well.
-- The district dropdown lists only districts with 5+ listings.
-
-## Running locally
-
-Each part of the project has its own dependencies. See the
-`requirements-*.txt` files in `scripts/` and `api/`.
-
-**Scraper and cleaning:**
+## Run locally
 
 ```
-python -m venv scripts/.venv-scraper
-scripts\.venv-scraper\Scripts\activate
+# data
 pip install -r scripts/requirements-scraper.txt
 python scripts/scraper.py
 python scripts/clean_data.py
-```
 
-**Model training (Jupyter notebooks):**
-
-```
-python -m venv scripts/.venv-train
-scripts\.venv-train\Scripts\activate
+# training (notebooks) and README charts
 pip install -r scripts/requirements-train.txt
-jupyter notebook scripts/04_model_selection.ipynb
-```
+python scripts/make_readme_charts.py
 
-**API (without Docker):**
-
-```
-python -m venv api/.venv-api
-api\.venv-api\Scripts\activate
+# API
 pip install -r api/requirements-api.txt
 uvicorn api.main:app --reload
-```
 
-**API (with Docker):**
-
-```
+# API in Docker
 docker build -f api/Dockerfile -t home-price-api .
 docker run -p 8000:8000 home-price-api
 ```
+
+Each part has its own virtual environment; see the `requirements-*.txt` files.
