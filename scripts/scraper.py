@@ -43,7 +43,7 @@ def parse_node(node):
 def fetch_page(cursor=None):
     """Fetch one page (24 listings) from bina.az's GraphQL API. cursor=None gets page 1."""
     variables = {
-        "first": 24,
+        "first": 25,
         "filter": {"categoryId":"1","leased": False},
         "sort": "BUMPED_AT_DESC"
     }
@@ -63,14 +63,14 @@ def fetch_page(cursor=None):
         }),
     }
 
-    response = requests.get(url, params=page_params, headers=headers)
+    response = requests.get(url, params=page_params, headers=headers, timeout=30)
     return response.json()
 
 
 all_items = []
 cursor = None
 page_number = 0
-target_count = 10000
+target_count = 100000
 
 # Keep fetching pages until the API says there's nothing left (hasNextPage: false).
 # We don't know the total listing count in advance.
@@ -102,7 +102,7 @@ print("total", len(all_items))
 
 # Save to disk — all_items only exists in memory otherwise and is lost
 # once this script finishes running.
-with open("data/items_full.csv", "w", newline="", encoding="utf-8") as f:
+with open("data/items_all.csv", "w", newline="", encoding="utf-8") as f:
     writer = csv.DictWriter(f, fieldnames=all_items[0].keys())
     writer.writeheader()
     writer.writerows(all_items)

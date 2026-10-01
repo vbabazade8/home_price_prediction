@@ -9,9 +9,9 @@ app = FastAPI()
 # Serve the frontend (static/index.html + assets) at /static/*
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Load the trained Random Forest model once at startup, not per-request,
-# so predictions stay fast. Trained in scripts/explore_full_data.ipynb
-# on the full bina.az catalog (~9.5k listings), not just VIP ones.
+# Load the trained model once at startup, not per-request, so predictions
+# stay fast. HistGradientBoosting tuned with Optuna, trained in
+# scripts/04_model_selection.ipynb on the full bina.az catalog (~44k listings).
 model = joblib.load("models/model.pkl")
 
 # isVipped/isFeatured are fixed here, not exposed in the form. They

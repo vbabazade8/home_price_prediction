@@ -5,35 +5,37 @@ trained on real listings scraped from bina.az.
 
 ## Live demo
 
+https://home-price-prediction-ae4m.onrender.com/static/index.html
+
 Hosted on Render's free tier: the service sleeps after 15 minutes
 without traffic, so the first request after that can take about a
 minute while it wakes up.
 
-https://home-price-prediction-ae4m.onrender.com/static/index.html
-
 ## Project stages
 
-1. **Scraping** (`scripts/scraper.py`) — collects listing data from
-   bina.az's GraphQL API (the `SearchItems` operation, which covers
-   the full catalog, not just VIP-promoted listings). Handles
-   pagination via cursor, saves raw data to `data/items_full.csv`.
+1. **Scraping** (`scripts/scraper.py`) — collects the full sale catalog
+   from bina.az's GraphQL API (`SearchItems` operation, ~58.7k listings).
+   Pages of 25 listings (the server's maximum), cursor pagination,
+   retries on network errors. Saves raw data to `data/items_all.csv`.
 
-2. **Cleaning** (`scripts/clean_data.py`) — removes listings with
-   missing rooms/location (land, commercial properties), filters out
-   price outliers using price-per-square-meter (removes rental
-   listings mixed into the sale data), casts types, saves cleaned
-   data to `data/item_clean_full.csv`.
+2. **Cleaning** (`scripts/clean_data.py`) — drops listings without rooms
+   or district, unrealistic prices (< 5,000 AZN or < 300 AZN/m²), repeated
+   ids, and the same property re-posted under different ids. Prints the
+   row count after every step. Saves `data/item_clean_all.csv`
+   (44,382 rows).
 
-3. **Model development** (`scripts/01_train_filtered_data.ipynb`, `scripts/02_explore_train_full_data.ipynb`) —
-   feature preparation, comparing candidate models with justified
-   metrics, hyperparameter tuning, saving the final model to
-   `models/model.pkl`.
+3. **Model development** (notebooks, in order):
+   - `scripts/01_train_filtered_data.ipynb` — first model on ~950 VIP listings
+   - `scripts/02_explore_train_full_data.ipynb` — 10x more data, Random Forest
+   - `scripts/03_eda.ipynb` — exploratory data analysis
+   - `scripts/04_model_selection.ipynb` — duplicates, full catalog,
+     LazyPredict, Optuna, final model
 
 4. **API** (`api/main.py`) — a FastAPI backend that loads the trained
-   model and exposes a `/predict` endpoint.
+   model and exposes `/predict` and `/locations` endpoints.
 
-5. **Frontend** (`static/index.html`) — a simple HTML form that calls
-   the API and displays the predicted price.
+5. **Frontend** (`static/index.html`, `static/style.css`) — a form with a
+   district dropdown that calls the API and shows the predicted price.
 
 6. **Containerization** (`api/Dockerfile`) — packages the API, model,
    and frontend into a Docker image so it runs the same way on any
@@ -44,7 +46,9 @@ https://home-price-prediction-ae4m.onrender.com/static/index.html
 
 ## Model architecture
 
-- **Algorithm:** Random Forest Regressor (scikit-learn)
+- **Algorithm:** `HistGradientBoostingRegressor` (scikit-learn), tuned
+  with Optuna: learning_rate 0.038, 1,100 iterations, 222 leaves per
+  tree, min_samples_leaf 5, max_features 0.54. Model size: ~27 MB.
 - **Features (input to the model):**
   - `rooms` — number of rooms
   - `area` — total area (m²)
@@ -54,56 +58,67 @@ https://home-price-prediction-ae4m.onrender.com/static/index.html
   - `isVipped`, `isFeatured` — whether the original listing was
     promoted on bina.az (fixed to a constant value in the API, not
     user-editable — see "Why these two features are fixed" below)
-  - `location_*` — one-hot encoded district (60 categories; districts
+  - `location_*` — one-hot encoded district (83 columns; districts
     with fewer than 5 listings are grouped into `location_Other`)
 - **Target:** `price` (sale price in AZN)
 
 ## Why this model
 
-Four candidate models were trained and compared on the same
-train/test split, using three metrics:
+**Metrics.** MAE (mean absolute error, in AZN) is the primary metric:
+"the model is off by this many manats on average". RMSE (penalizes large
+errors), R² (share of price variance explained) and MAPE (error as % of
+the real price) are reported alongside.
 
-| Model | MAE | RMSE | R² |
-|---|---|---|---|
-| Linear Regression | 56,559 | 116,522 | 0.687 |
-| Ridge | 56,485 | 116,572 | 0.686 |
-| **Random Forest** | 42,039 | **96,574** | **0.785** |
-| Gradient Boosting | 54,248 | 102,212 | 0.759 |
+**1. Many models at once.** LazyPredict trained ~40 regressors on a
+random 10k-row sample. Tree ensembles and boosting led; linear models
+plateaued at R² ≈ 0.73. The ranking depended on the metric: boosting led
+on R²/RMSE, ExtraTrees and Random Forest on MAE.
 
-- **MAE (Mean Absolute Error)** was chosen as the primary metric: it's
-  in the same units as the price (AZN), making it directly
-  interpretable — "the model is off by this many manats on average."
-- **RMSE** penalizes large errors more heavily, which helps catch
-  models that look fine on average but have occasional very bad
-  predictions.
-- **R²** measures how much of the price variance the model explains
-  overall, relative to a naive "always predict the mean" baseline.
+**2. Shortlist on all data** (5-fold cross-validation, default settings):
 
-Random Forest was chosen despite a slightly worse MAE than Linear
-Regression, because it won clearly on RMSE and R² — indicating more
-consistent predictions with fewer large misses, which matters more
-for a usable model than a marginally better average error.
+| Model | MAE | RMSE | R² | MAPE | Size |
+|---|---|---|---|---|---|
+| ExtraTrees | 36,046 | 94,515 | 0.834 | 11.4% | 482 MB |
+| Random Forest | 37,598 | 96,404 | 0.827 | 11.8% | 318 MB |
+| HistGradientBoosting | 47,115 | 108,129 | 0.783 | 14.9% | 0.4 MB |
+
+The forests were the most accurate but far too large to deploy (GitHub
+file limit 100 MB, Render free tier 512 MB RAM). So the goal became:
+the most accurate model that fits these limits.
+
+**3. Final comparison** on a 20% hold-out not used for tuning: a smaller
+ExtraTrees (50 trees, min_samples_leaf 3) vs HistGradientBoosting tuned
+with Optuna (40 trials, 3-fold CV):
+
+| Model | MAE | RMSE | R² | MAPE | Size |
+|---|---|---|---|---|---|
+| ExtraTrees (small) | 40,216 | 114,876 | 0.779 | 12.2% | 56 MB |
+| **HistGradientBoosting (tuned)** | **37,456** | **100,104** | **0.832** | **11.5%** | **27 MB** |
+
+The tuned boosting model wins on every metric at half the size. The final
+model is retrained on all 44k rows.
 
 ## How the model was improved
 
-1. **More data.** The first version was trained only on bina.az's
-   "featured" (VIP) listings (~950 rows after cleaning). A second,
-   full-catalog scrape (`SearchItems` operation instead of
-   `FeaturedItemsRow`) collected ~9,500 cleaned listings — about 10x
-   more data, with far fewer missing values and much better coverage
-   of rare districts (fewer listings falling into `location_Other`).
-   This alone dropped MAE from ~88,600 to ~42,000 AZN.
+| Step | Data | Model | MAE (AZN) |
+|---|---|---|---|
+| First version | ~950 VIP listings | Random Forest | ~88,600 |
+| 10x more data | ~9,500 listings | Random Forest | ~42,000 (too optimistic, see below) |
+| Duplicates removed | ~8,600 listings | Random Forest | ~44,300 |
+| Full catalog | ~44,400 listings | Random Forest | ~38,200 |
+| Model choice + tuning | ~44,400 listings | HistGradientBoosting | ~37,500 (hold-out) |
 
-2. **Hyperparameter tuning.** `GridSearchCV` with 5-fold
-   cross-validation was used to search over `n_estimators`,
-   `max_depth`, and `min_samples_split`. The best configuration
-   improved MAE slightly further, to ~41,700.
+- **Duplicates.** EDA found that ~10% of listings were the same property
+  re-posted under different ids. Copies in both train and test made the
+  test score too optimistic (data leakage). Removing them gave an honest
+  baseline.
+- **More data.** A learning curve showed MAE still falling as training
+  data grew, so the full catalog was scraped. With the same model, MAE
+  dropped from ~44.3k to ~38.2k.
+- **Model choice and tuning** — see "Why this model".
 
-3. **Model size vs. accuracy tradeoff.** The fully tuned model
-   (`n_estimators=300`) was 167MB — too large for GitHub's 100MB file
-   limit. Testing smaller values showed `n_estimators=50` gives
-   nearly identical accuracy (MAE 42,047, a 0.76% difference) at a
-   fraction of the size (28MB), so that was used as the final model.
+Numbers in different rows come from different test sets, so they show
+the direction and size of each improvement, not exact differences.
 
 ## Why these two features are fixed (isVipped, isFeatured)
 
@@ -120,25 +135,42 @@ and are not part of the form.
 
 ## Known limitations
 
-- The training data is almost entirely Baku listings. Locations
-  outside Baku (e.g. Gəncə) will fall back to `location_Other` and
-  produce unreliable predictions.
-- The `location` field in the form must match a known district name
-  exactly (including Azerbaijani characters); unrecognized input
-  falls back to `location_Other`.
+- **Baku only.** 98.4% of listings in the full catalog are in Baku
+  (Xırdalan 612, Sumqayıt 83, other cities single listings), so
+  predictions outside Baku are unreliable.
+- **Repair is mixed up with new buildings.** In the data, "no repair"
+  mostly means "new building sold without finishing" (e.g. Ağ şəhər,
+  Sea Breeze), and new buildings are more expensive. The model can
+  therefore predict a *lower* price with repair for some inputs (e.g. a
+  250 m² apartment in Xətai). A new-build/resale feature would fix this.
+- **Duplicate detection is approximate.** Listings are treated as
+  duplicates when price, rooms, area, floor, floors, district and repair
+  all match; two genuinely different identical apartments in the same
+  building may be removed as well.
+- The district dropdown lists only districts with 5+ listings.
 
 ## Running locally
 
 Each part of the project has its own dependencies. See the
 `requirements-*.txt` files in `scripts/` and `api/`.
 
-**Scraper:**
+**Scraper and cleaning:**
 
 ```
 python -m venv scripts/.venv-scraper
 scripts\.venv-scraper\Scripts\activate
 pip install -r scripts/requirements-scraper.txt
 python scripts/scraper.py
+python scripts/clean_data.py
+```
+
+**Model training (Jupyter notebooks):**
+
+```
+python -m venv scripts/.venv-train
+scripts\.venv-train\Scripts\activate
+pip install -r scripts/requirements-train.txt
+jupyter notebook scripts/04_model_selection.ipynb
 ```
 
 **API (without Docker):**
@@ -155,13 +187,4 @@ uvicorn api.main:app --reload
 ```
 docker build -f api/Dockerfile -t home-price-api .
 docker run -p 8000:8000 home-price-api
-```
-
-**Model training (Jupyter notebooks):**
-
-```
-python -m venv scripts/.venv-train
-scripts\.venv-train\Scripts\activate
-pip install -r scripts/requirements-train.txt
-jupyter notebook scripts/train.ipynb
 ```
