@@ -65,7 +65,7 @@ The VIP flags correlate with price only because owners of pricier apartments pay
 ## Limitations
 
 - **Baku only:** 98.4% of listings are in Baku; other cities are unreliable.
-- **Repair vs new buildings:** "no repair" usually means a new building sold without finishing, which is more expensive, so repair can lower the prediction for some inputs. A new-build/resale feature would fix this.
+- **Repair vs new buildings:** for a typical apartment repair adds ~22.5k AZN, but in the historic centre (Sahil, Nizami, Nəsimi, Xətai) the model often predicts a *lower* price with repair: there "no repair" usually means a new, expensive building sold without finishing. A new-build/resale feature would fix this (see `05_feature_importance.ipynb`).
 - **Duplicate detection is approximate:** identical apartments in the same building may be removed as duplicates.
 
 ## Run locally
