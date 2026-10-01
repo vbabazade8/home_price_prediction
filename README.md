@@ -2,8 +2,7 @@
 
 Predicts apartment sale prices in Baku from listings scraped from bina.az.
 
-**Live demo:** https://home-price-prediction-ae4m.onrender.com/static/index.html
-(free Render tier: the first request after 15 idle minutes can take about a minute)
+**Live demo:** https://home-price-prediction-sandy.vercel.app/static/index.html
 
 ## Results
 
